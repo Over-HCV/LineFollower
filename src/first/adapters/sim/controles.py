@@ -69,7 +69,7 @@ class Controles:
         self.cortina = Deslizador(
             "cortina (px)",
             0.0,
-            80.0,
+            120.0,
             float(brain.params_linea.margen_lateral),
             paso=5.0,
             formato="{:.0f}",
