@@ -39,8 +39,11 @@ PRESETS: dict[Command, tuple[float, float]] = {
     Command.DOWN: (0.0, 0.0),
 }
 
-OFFSET_SIGNO_MIN: float = 45.0
-OFFSET_SIGNO_MAX: float = 120.0
+# Una señal puede quedar centrada sobre la línea (offset 0): el cerebro tapa
+# su caja con el color del piso antes de buscar la línea, así que ese tramo
+# desaparece y el robot lo cruza en modo hueco. Es una prueba válida y dura.
+OFFSET_SIGNO_MIN: float = 0.0
+OFFSET_SIGNO_MAX: float = 160.0
 
 
 @dataclass(frozen=True, slots=True)

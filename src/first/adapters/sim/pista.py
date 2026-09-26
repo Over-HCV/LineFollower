@@ -37,6 +37,34 @@ def __pista_ovalo() -> list[tuple[float, float]]:
     ]
 
 
+def __pista_chicane(lobulos: int = 6, amplitud: float = 40.0) -> list[tuple[float, float]]:
+    """Óvalo ondulado: cadena de curvas cóncavas y convexas encadenadas.
+
+    El radio base se modula con una senoidal de ``lobulos`` periodos, así que
+    el trazo alterna hacia dentro y hacia fuera sin parar. Es la pista dura:
+    los tramos vecinos quedan a ~220px, y la cámara abarca ±210px, o sea que
+    casi siempre se ven DOS líneas y el detector tiene que elegir la propia.
+
+    La amplitud está calibrada para que el radio de curvatura mínimo sea
+    ~100px: el carrito gira con radio ~59px (PRESETS), así que las curvas son
+    exigentes pero tomables. La versión anterior tenía esquinas de 39px, por
+    debajo del radio de giro: eran físicamente imposibles.
+    """
+    rx, ry = 530.0, 410.0
+    muestras = lobulos * 8
+    puntos: list[tuple[float, float]] = []
+    for i in range(muestras):
+        angulo = 2.0 * math.pi * i / muestras
+        onda = amplitud * math.sin(lobulos * angulo)
+        puntos.append(
+            (
+                800.0 + (rx + onda) * math.cos(angulo),
+                600.0 + (ry + onda) * math.sin(angulo),
+            )
+        )
+    return puntos
+
+
 def __pista_ocho() -> list[tuple[float, float]]:
     """Lemniscata: la línea se cruza a sí misma en el centro (como el ocho)."""
     return [
@@ -52,16 +80,7 @@ PISTAS: dict[str, list[tuple[float, float]]] = {
     "cacahuate": PUNTOS_CONTROL,
     "ovalo": __pista_ovalo(),
     "ocho": __pista_ocho(),
-    "chicane": [
-        (260.0, 260.0),
-        (1340.0, 260.0),
-        (1340.0, 940.0),
-        (1010.0, 940.0),
-        (1010.0, 640.0),
-        (790.0, 640.0),
-        (790.0, 940.0),
-        (260.0, 940.0),
-    ],
+    "chicane": __pista_chicane(),
 }
 
 

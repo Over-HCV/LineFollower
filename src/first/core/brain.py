@@ -8,16 +8,16 @@ real con Arduino (a través de los adaptadores).
 from __future__ import annotations
 
 import time
-from collections import deque
 from dataclasses import replace
 from typing import Any, Callable
 
-import cv2
 import numpy as np
 from numpy.typing import NDArray
 
 from .control import ControladorLinea
 from .types import Command, EstadoRobot, LineInfo, Senal, Telemetry
+from .senales import FiltroSenales, ocultar as ocultar_senal
+from .vision.debug import dibujar as superponer_debug
 from .vision.line import ParamsLinea, detectar_linea
 from .vision.sign import DeteccionSenal, detectar_senal
 
@@ -39,6 +39,7 @@ class Brain:
         umbral_hueco: float = 40.0,  # error máximo para asumir hueco (px)
         tolerancia_hueco: float = 0.45,  # dead-reckoning recto hasta (s)
         cobertura_recaptura: float = 0.6,  # candidato debe cruzar la franja
+        suavizado_centro: float = 0.35,  # EMA de la predicción del centro
         area_minima_senal: float = 900.0,
         timeout_recuperacion: float = 3.0,
         params_linea: ParamsLinea | None = None,
@@ -56,6 +57,7 @@ class Brain:
         self.umbral_hueco = umbral_hueco
         self.tolerancia_hueco = tolerancia_hueco
         self.cobertura_recaptura = cobertura_recaptura
+        self.suavizado_centro = suavizado_centro
         self.params_linea = params_linea or ParamsLinea()
         self.dibujar_debug = dibujar_debug
 
@@ -67,29 +69,28 @@ class Brain:
         )
         self.__ventana_votacion = ventana_votacion
         self.estado: EstadoRobot = EstadoRobot.SIGUIENDO
-        self.__historial_senales: deque[Senal | None] = deque(maxlen=5)
+        self.__senales = FiltroSenales(confirmar_pare, confirmar_siga, ventana=5)
         self.__signo_ultimo_error: int = -1  # hacia dónde barrer si se pierde
-        self.__contador_recuperacion: int = 0
         self.__ausencias: int = 0  # frames seguidos sin línea (debounce)
         self.__ultimo_comando: Command = Command.UP
         self.__ultimo_error: float = 0.0  # error del último frame con línea
+        self.__centro_esperado: float | None = None  # dónde se espera la línea
         self.__t_pare: float | None = None
         self.__t_perdida: float | None = None
-        self.__bloqueo_senal: Senal | None = None
         self.__cooldown_hasta: float = 0.0
 
     def reiniciar(self) -> None:
         """Vuelve al estado inicial (por ejemplo, al reiniciar la carrera)."""
         self.estado = EstadoRobot.SIGUIENDO
         self.__control.reiniciar()
-        self.__historial_senales.clear()
+        self.__senales.reiniciar()
         self.__t_pare = None
         self.__t_perdida = None
-        self.__bloqueo_senal = None
         self.__cooldown_hasta = 0.0
         self.__ausencias = 0
         self.__ultimo_comando = Command.UP
         self.__ultimo_error = 0.0
+        self.__centro_esperado = None
 
     def reconfigurar(
         self,
@@ -99,6 +100,7 @@ class Brain:
         modo_linea: str | None = None,
         tolerancia_hueco: float | None = None,
         margen_lateral: int | None = None,
+        sigma_atencion: float | None = None,
     ) -> None:
         """Ajusta parámetros en caliente SIN reiniciar la máquina de estados.
 
@@ -125,6 +127,8 @@ class Brain:
             cambios["modo"] = modo_linea
         if margen_lateral is not None:
             cambios["margen_lateral"] = max(0, margen_lateral)
+        if sigma_atencion is not None:
+            cambios["sigma_atencion"] = max(0.05, sigma_atencion)
         if cambios:
             self.params_linea = replace(self.params_linea, **cambios)
         if tolerancia_hueco is not None:
@@ -147,68 +151,61 @@ class Brain:
             return Command.DOWN, telemetria
 
         deteccion = detectar_senal(frame, self.area_minima_senal)
-        self.__historial_senales.append(deteccion.senal)
+        self.__senales.observar(deteccion.senal)
         comando, linea = self.__transicionar(frame, deteccion)
         telemetria = Telemetry(
             comando=comando,
             estado=self.estado,
-            senal_confirmada=self.__senal_confirmada(),
+            senal_confirmada=self.__senales.confirmada(
+                self.estado is EstadoRobot.PARE
+            ),
             senal_cruda=deteccion.senal,
             linea=linea,
-            debug=self.__dibujar(frame, linea, deteccion, comando),
+            debug=(
+                superponer_debug(
+                    frame,
+                    linea,
+                    deteccion,
+                    comando,
+                    self.estado.value,
+                    self.params_linea,
+                    self.__centro_esperado,
+                )
+                if self.dibujar_debug
+                else None
+            ),
         )
         return comando, telemetria
 
-    def __ocultar_senal(
-        self, frame: NDArray[np.uint8], deteccion: DeteccionSenal
-    ) -> NDArray[np.uint8]:
-        """Tapa la señal detectada con el color mediano del suelo.
+    def __actualizar_centro(self, linea: LineInfo, ancho: int) -> None:
+        """Sigue con un EMA dónde se espera la línea el próximo frame.
 
-        Evita que el octágono de color contamine el K-Means de la línea
-        (el matiz del rojo envuelve 0/179 y distorsiona los clusters).
+        Es el ancla de la atención: en curva la línea correcta no está en el
+        centro del frame. Sin línea la predicción decae hacia el centro, para
+        no quedarse enganchada a una posición vieja mientras se recupera.
         """
-        if deteccion.caja is None:
-            return frame
-        frame = frame.copy()
-        x, y, w, h = deteccion.caja
-        limite_y = min(y + h, frame.shape[0])
-        limite_x = min(x + w, frame.shape[1])
-        frame[y:limite_y, x:limite_x] = tuple(
-            int(v) for v in np.median(frame.reshape(-1, 3), axis=0)
-        )
-        return frame
-
-    def __senal_confirmada(self) -> Senal | None:
-        """Señal con confirmación por mayoría; bloquea re-disparos de la misma."""
-        pare = self.__historial_senales.count(Senal.PARE)
-        siga = self.__historial_senales.count(Senal.SIGA)
-        if self.estado is EstadoRobot.PARE:
-            # Detenido: solo SIGA importa (reanudar antes del temporizador).
-            confirmada: Senal | None = (
-                Senal.SIGA if siga >= self.confirmar_siga else None
-            )
-        elif pare >= self.confirmar_pare:
-            confirmada = Senal.PARE
-        elif siga >= self.confirmar_siga:
-            confirmada = Senal.SIGA
-        else:
-            confirmada = None
-
-        if self.__bloqueo_senal is not None:
-            if confirmada is self.__bloqueo_senal:
-                return None
-            if self.__historial_senales.count(self.__bloqueo_senal) == 0:
-                self.__bloqueo_senal = None
-        return confirmada
+        if linea.presente:
+            objetivo = float(linea.objetivo_px)
+            if self.__centro_esperado is None:
+                self.__centro_esperado = objetivo
+            else:
+                self.__centro_esperado += self.suavizado_centro * (
+                    objetivo - self.__centro_esperado
+                )
+        elif self.__centro_esperado is not None:
+            self.__centro_esperado += 0.2 * (ancho / 2.0 - self.__centro_esperado)
 
     def __transicionar(
         self, frame: NDArray[np.uint8], deteccion: DeteccionSenal
     ) -> tuple[Command, LineInfo]:
         ahora = self.__reloj()
-        confirmada = self.__senal_confirmada()
+        confirmada = self.__senales.confirmada(self.estado is EstadoRobot.PARE)
         linea = detectar_linea(
-            self.__ocultar_senal(frame, deteccion), self.params_linea
+            ocultar_senal(frame, deteccion),
+            self.params_linea,
+            self.__centro_esperado,
         )
+        self.__actualizar_centro(linea, frame.shape[1])
 
         # La señal PARE solo se obedece con línea visible: un robot perdido
         # no debe detenerse por una señal que ve desde lejos de la pista.
@@ -222,7 +219,7 @@ class Brain:
             self.estado = EstadoRobot.PARE
             self.__t_pare = ahora
             self.__control.reiniciar()
-            self.__bloqueo_senal = Senal.PARE
+            self.__senales.bloquear(Senal.PARE)
 
         if self.estado is EstadoRobot.PARE:
             assert self.__t_pare is not None
@@ -301,51 +298,3 @@ class Brain:
                 ), linea
             self.estado = EstadoRobot.PERDIDO
         return Command.DOWN, linea
-
-    def __dibujar(
-        self,
-        frame: NDArray[np.uint8],
-        linea: LineInfo,
-        deteccion: DeteccionSenal,
-        comando: Command,
-    ) -> NDArray[np.uint8]:
-        """Superpone ROIs, centroide, objetivo y estado para depuración."""
-        lienzo = frame.copy()
-        alto, ancho = lienzo.shape[:2]
-        y_cerca = int(alto * self.params_linea.roi_cerca[0])
-        y_lejos = int(alto * self.params_linea.roi_lejos[0])
-        cv2.line(lienzo, (0, y_cerca), (ancho, y_cerca), (255, 255, 0), 1)
-        cv2.line(lienzo, (0, y_lejos), (ancho, y_lejos), (255, 0, 255), 1)
-        cv2.line(lienzo, (ancho // 2, y_lejos), (ancho // 2, alto), (0, 255, 255), 1)
-        if linea.presente:
-            cv2.circle(lienzo, (linea.cx, y_cerca + linea.cy), 6, (0, 255, 0), 2)
-            cv2.line(
-                lienzo,
-                (linea.objetivo_px, y_lejos),
-                (linea.objetivo_px, alto),
-                (0, 0, 255),
-                2,
-            )
-        if deteccion.caja is not None:
-            x, y, w, h = deteccion.caja
-            cv2.rectangle(lienzo, (x, y), (x + w, y + h), (0, 255, 255), 2)
-            nombre = deteccion.senal.value.upper() if deteccion.senal else ""
-            cv2.putText(
-                lienzo,
-                nombre,
-                (x, max(y - 8, 14)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 255, 255),
-                2,
-            )
-        cv2.putText(
-            lienzo,
-            f"{comando.value.upper()} | {self.estado.value}",
-            (8, 22),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
-        return lienzo

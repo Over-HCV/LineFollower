@@ -16,7 +16,7 @@ from .pista import PISTAS
 from .realismo import REALISMOS
 
 ANCHO_COLUMNA: int = 220  # riel + etiqueta de un slider
-SLIDERS_POR_FILA: int = 4
+SLIDERS_POR_FILA: int = 5
 
 
 class Controles:
@@ -75,6 +75,18 @@ class Controles:
             formato="{:.0f}",
             al_cambiar=lambda v: brain.reconfigurar(margen_lateral=int(v)),
         )
+        # Atención: σ de la gaussiana que pondera los candidatos a línea.
+        # Bajarlo hace que el detector ignore los lados (pistas con tramos
+        # paralelos); subirlo lo vuelve indiferente a dónde estaba la línea.
+        self.atencion = Deslizador(
+            "atencion o",
+            0.05,
+            0.20,
+            float(brain.params_linea.sigma_atencion),
+            paso=0.01,
+            formato="{:.2f}",
+            al_cambiar=lambda v: brain.reconfigurar(sigma_atencion=v),
+        )
         self.velocidad = Deslizador(
             "velocidad x",
             0.25,
@@ -85,7 +97,13 @@ class Controles:
             al_cambiar=al_cambiar_velocidad,
         )
         self.selectores = [self.pista, self.realismo, self.modo]
-        self.deslizadores = [self.tolerancia, self.pare, self.cortina, self.velocidad]
+        self.deslizadores = [
+            self.tolerancia,
+            self.pare,
+            self.cortina,
+            self.atencion,
+            self.velocidad,
+        ]
 
     @property
     def filas_sliders(self) -> int:

@@ -26,6 +26,16 @@ from .pista import PISTAS, Pista
 from .realismo import REALISMOS
 from .world import Mundo
 
+# Flechas U+2190-2193: las de la zona emoji (⬆ U+2B06, 🢂 U+1F882) no están en
+# Menlo/Monaco/Consolas y pygame las pinta como caja vacía. Estas sí existen en
+# la fuente monoespaciada, así que se ven en cualquier máquina.
+FLECHAS_COMANDOS: dict[Command, str] = {
+    Command.UP: "↑",
+    Command.DOWN: "↓",
+    Command.RIGHT: "→",
+    Command.LEFT: "←",
+}
+
 TECLAS_MANUAL: dict[int, Command] = {
     pygame.K_UP: Command.UP,
     pygame.K_RIGHT: Command.RIGHT,
@@ -135,7 +145,11 @@ def ejecutar_simulador(
         escala_tiempo = valor
 
     controles = Controles(
-        brain, pista_actual, realismo_actual, cambiar_pista, cambiar_realismo,
+        brain,
+        pista_actual,
+        realismo_actual,
+        cambiar_pista,
+        cambiar_realismo,
         fijar_velocidad,
     )
     disposicion = hud.calcular(
@@ -241,7 +255,8 @@ def ejecutar_simulador(
             [
                 (
                     f"modo: {'AUTO' if automatico else 'MANUAL'}   "
-                    f"comando: {comando.value}   estado: {telemetria.estado.value}",
+                    f"comando: {FLECHAS_COMANDOS[comando]}   "
+                    f"estado: {telemetria.estado.value}",
                     hud.COLOR_ACENTO,
                 ),
                 (

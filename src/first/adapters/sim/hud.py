@@ -32,7 +32,7 @@ COLOR_AYUDA: tuple[int, int, int] = (150, 150, 150)
 COLOR_FANTASMA: tuple[int, int, int] = (250, 250, 120)
 
 LINEAS_REFERENCIA: list[str] = [
-    "modo: MANUAL   comando: right   estado: recuperando",
+    "modo: MANUAL   comando: > right   estado: recuperando",
     "senal: siga   error: -999 px",
     "t: 99999.9s   vueltas: 99   descarrilamientos: 99",
     "PAREs cumplidos: 999   intervenciones: 999",
