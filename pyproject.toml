@@ -1,0 +1,28 @@
+[project]
+name = "first"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "OverHCV", email = "over.castrillon@urosario.edu.co" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "opencv-python>=5.0.0.93",
+    "pygame-ce>=2.5.8",
+]
+
+[project.scripts]
+first = "first.main:main"
+first-calib = "first.calib:main"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
