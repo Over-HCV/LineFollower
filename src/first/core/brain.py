@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from dataclasses import replace
 from typing import Callable
 
 import cv2
@@ -45,6 +46,8 @@ class Brain:
         dibujar_debug: bool = True,
     ) -> None:
         self.segundos_pare = segundos_pare
+        self.tolerancia_entrada = tolerancia_entrada
+        self.tolerancia_salida = tolerancia_salida
         self.timeout_recuperacion = timeout_recuperacion
         self.area_minima_senal = area_minima_senal
         self.confirmar_pare = confirmar_pare
@@ -62,6 +65,7 @@ class Brain:
             umbral_salida=tolerancia_salida,
             ventana=ventana_votacion,
         )
+        self.__ventana_votacion = ventana_votacion
         self.estado: EstadoRobot = EstadoRobot.SIGUIENDO
         self.__historial_senales: deque[Senal | None] = deque(maxlen=5)
         self.__signo_ultimo_error: int = -1  # hacia dónde barrer si se pierde
@@ -86,6 +90,39 @@ class Brain:
         self.__ausencias = 0
         self.__ultimo_comando = Command.UP
         self.__ultimo_error = 0.0
+
+    def reconfigurar(
+        self,
+        tolerancia_entrada: int | None = None,
+        tolerancia_salida: int | None = None,
+        segundos_pare: float | None = None,
+        modo_linea: str | None = None,
+        tolerancia_hueco: float | None = None,
+    ) -> None:
+        """Ajusta parámetros en caliente SIN reiniciar la máquina de estados.
+
+        La ventana de votación se reconstruye limpia: al cambiar umbrales lo
+        sensato es volver a votar desde cero.
+        """
+        if tolerancia_entrada is not None:
+            self.tolerancia_entrada = max(3, tolerancia_entrada)
+        if tolerancia_salida is not None:
+            self.tolerancia_salida = max(2, tolerancia_salida)
+        if tolerancia_entrada is not None or tolerancia_salida is not None:
+            self.tolerancia_salida = min(
+                self.tolerancia_salida, self.tolerancia_entrada - 2
+            )
+            self.__control = ControladorLinea(
+                umbral_entrada=self.tolerancia_entrada,
+                umbral_salida=self.tolerancia_salida,
+                ventana=self.__ventana_votacion,
+            )
+        if segundos_pare is not None:
+            self.segundos_pare = max(0.0, segundos_pare)
+        if modo_linea is not None:
+            self.params_linea = replace(self.params_linea, modo=modo_linea)
+        if tolerancia_hueco is not None:
+            self.tolerancia_hueco = max(0.0, tolerancia_hueco)
 
     def procesar(self, frame: NDArray[np.uint8] | None) -> tuple[Command, Telemetry]:
         """Procesa un frame BGR y retorna el comando único más la telemetría."""

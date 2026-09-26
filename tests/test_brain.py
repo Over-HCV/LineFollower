@@ -95,3 +95,37 @@ def test_frame_invalido_detiene() -> None:
     brain = crear_brain(reloj)
     comando, _ = brain.procesar(None)
     assert comando is Command.DOWN
+
+
+def test_reconfigurar_tolerancia_en_vivo() -> None:
+    reloj = RelojFalso()
+    brain = Brain(tolerancia_entrada=30, reloj=reloj, dibujar_debug=False)
+    # error +20 < tolerancia 30: no gira
+    for _ in range(6):
+        comando, _ = brain.procesar(frame_con_linea(180))
+    assert comando is Command.UP
+
+    brain.reconfigurar(tolerancia_entrada=12)
+    assert brain.tolerancia_entrada == 12
+    # el mismo error ahora supera la tolerancia: gira a la derecha
+    for _ in range(6):
+        comando, _ = brain.procesar(frame_con_linea(180))
+    assert comando is Command.RIGHT
+
+
+def test_reconfigurar_conserva_estado_y_cambia_modo() -> None:
+    reloj = RelojFalso()
+    brain = Brain(reloj=reloj, dibujar_debug=False)
+    for _ in range(3):
+        brain.procesar(frame_linea_y_octagono(ROJO))
+        reloj.avanzar(0.1)
+    assert brain.estado is EstadoRobot.PARE
+
+    brain.reconfigurar(modo_linea="umbral", segundos_pare=0.2)
+    assert brain.params_linea.modo == "umbral"
+    assert brain.segundos_pare == 0.2
+    assert brain.estado is EstadoRobot.PARE  # la FSM no se reinicia
+
+    reloj.avanzar(0.3)  # excede el nuevo tiempo de PARE
+    _, telemetria = brain.procesar(frame_con_linea(160))
+    assert telemetria.estado is EstadoRobot.SIGUIENDO
