@@ -1,6 +1,8 @@
 Resumen:
 
 Lo que quedó construido
+
+```
 src/first/
 ├── main.py          # CLI: --source sim|webcam|video, --pare-segundos, --tolerancia
 ├── ports.py         # FrameSource / CommandSink (ABCs)
@@ -14,6 +16,7 @@ src/first/
     └── sim/         # pista.py (geometría) + realismo.py/trazo.py/defectos.py (render
                      # imperfecto) + world.py (física y métricas) + camera.py +
                      # pygame_ui.py/hud.py/controles.py/arrastre.py (UI) + config.py
+```
 
 Resultados del simulador: 3 vueltas de 31.6s (tiempo teórico), distancia a línea p95 = 15.6px, 0 descarrilamientos, PAREs 100% cumplidos. 74/74 tests.
 Las técnicas "ingeniosas" para diferenciarse (rúbrica)
