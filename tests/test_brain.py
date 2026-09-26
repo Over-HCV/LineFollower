@@ -143,3 +143,38 @@ def test_reconfigurar_cortina_lateral() -> None:
     assert brain.estado is EstadoRobot.SIGUIENDO  # la FSM no se reinicia
     _, telemetria = brain.procesar(frame_con_linea(40))
     assert not telemetria.linea.presente
+
+
+def test_no_se_va_tras_una_linea_vecina() -> None:
+    from conftest import frame_con_dos_lineas
+
+    reloj = RelojFalso()
+    brain = Brain(reloj=reloj, dibujar_debug=False)
+    for _ in range(5):  # engancha la línea central
+        comando, _ = brain.procesar(frame_con_linea(160))
+    assert comando is Command.UP
+
+    # aparece una vecina más gruesa por la izquierda (chicane/ocho)
+    for _ in range(8):
+        comando, telemetria = brain.procesar(frame_con_dos_lineas(160, 40))
+    assert comando is Command.UP
+    assert telemetria.estado is EstadoRobot.SIGUIENDO
+    assert abs(telemetria.linea.error_px) <= 8
+
+
+def test_la_prediccion_del_centro_decae_sin_linea() -> None:
+    from conftest import FONDO
+    import numpy as np
+
+    reloj = RelojFalso()
+    brain = Brain(reloj=reloj, dibujar_debug=False)
+    for _ in range(4):
+        brain.procesar(frame_con_linea(240))  # línea muy a la derecha
+
+    vacio = np.full((240, 320, 3), FONDO, dtype=np.uint8)
+    for _ in range(20):
+        brain.procesar(vacio)
+    # tras perderla, la atención vuelve al centro en vez de quedarse fija
+    _, telemetria = brain.procesar(frame_con_linea(160))
+    assert telemetria.linea.presente
+    assert abs(telemetria.linea.error_px) <= 8

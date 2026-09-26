@@ -14,7 +14,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..types import Command, DeteccionSenal, LineInfo
-from .line import ParamsLinea
+from .params import ParamsLinea
 
 ALTURA_CAMPANA: int = 46  # px de alto de la curva dibujada
 COLOR_CAMPANA: tuple[int, int, int] = (0, 200, 255)  # ámbar (BGR)
@@ -125,10 +125,10 @@ def __dibujar_atencion(
             COLOR_CENTRO,
             1,
         )
-    cv2.putText(
+    cv2.putText(  # esquina inferior derecha: no choca con las líneas de ROI
         lienzo,
-        f"sigma {params.sigma_atencion:.2f}",
-        (margen + 4, base - ALTURA_CAMPANA - 10),
+        f"atencion {params.sigma_atencion:.2f}",
+        (ancho - 118, 16),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.4,
         COLOR_CAMPANA,

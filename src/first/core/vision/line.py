@@ -14,40 +14,18 @@ horizontal y su centroide dejaría de ser una anticipación válida.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 
 import cv2
 import numpy as np
 from numpy.typing import NDArray
 
 from ..types import LineInfo
-from .kmeans import asignar, kmeans
+from .mascaras import ajustar_modelo, mascara_kmeans, mascara_umbral
+from .params import ParamsLinea
 
 Mascara = NDArray[np.uint8]
 
-
-@dataclass(frozen=True, slots=True)
-class ParamsLinea:
-    """Parámetros de la etapa de detección de línea."""
-
-    roi_cerca: tuple[float, float] = (0.72, 1.0)
-    roi_lejos: tuple[float, float] = (0.40, 0.72)
-    umbral_gris: int = 70
-    saturacion_maxima: float = 120.0  # más saturado = señal de color, no línea
-    k_kmeans: int = 3
-    submuestreo: int = 6
-    masa_minima: float = 350.0  # masa mínima del segmento (trazos delgados)
-    masa_maxima: float = 5000.0  # demasiada línea visible = no es línea
-    peso_mirada: float = 0.45
-    anticipacion_maxima: float = 30.0
-    ancho_far_maximo: float = 90.0  # bbox más ancho = línea cruzando
-    salto_far_maximo: float = 80.0  # anticipación descartada si salta más (px)
-    margen_lateral: int = 20  # cortina: columnas ignoradas a cada lado (px)
-    sigma_atencion: float = 0.28  # σ de la atención horizontal (fracción del ancho)
-    peso_cobertura: float = 1.5  # cuánto pesa cruzar la franja entera
-    bono_fondo: float = 1.6  # premio al segmento que toca el borde inferior
-    peso_fila: float = 3.0  # peso de la fila inferior frente a la superior
-    modo: str = "kmeans"  # "kmeans" | "umbral"
+__all__ = ["ParamsLinea", "detectar_linea"]
 
 
 def __recortar(
@@ -57,67 +35,6 @@ def __recortar(
     y0 = int(alto * franja[0])
     y1 = int(alto * franja[1])
     return frame[y0:y1, :]
-
-
-def __limpiar(mascara: Mascara) -> Mascara:
-    # Kernel 3x3: un kernel mayor borra trazos delgados reales (ancho variable).
-    kernel = np.ones((3, 3), np.uint8)
-    mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, kernel)
-    return cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, kernel)
-
-
-def __hsv_puntos(roi: NDArray[np.uint8]) -> NDArray[np.float64]:
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV).astype(np.float64)
-    return hsv.reshape(-1, 3)
-
-
-def __ajustar_modelo(
-    roi: NDArray[np.uint8], params: ParamsLinea
-) -> tuple[NDArray[np.float64], int]:
-    """Ajusta K-Means sobre una muestra y elige el cluster de la línea.
-
-    La línea es oscura Y desaturada (S baja); las señales de color son
-    oscuras en V pero saturadas, así que se excluyen con el criterio S.
-    """
-    puntos = __hsv_puntos(roi)
-    muestra = puntos[:: params.submuestreo]
-    centroides, _ = kmeans(muestra, k=params.k_kmeans)
-    candidatos = [
-        i for i in range(len(centroides)) if centroides[i, 1] < params.saturacion_maxima
-    ]
-    if not candidatos:
-        return centroides, -1
-    cluster_linea = min(candidatos, key=lambda i: centroides[i, 2])
-    return centroides, cluster_linea
-
-
-def __mascara_kmeans(
-    roi: NDArray[np.uint8], centroides: NDArray[np.float64], cluster_linea: int
-) -> Mascara:
-    if cluster_linea < 0:
-        return np.zeros(roi.shape[:2], dtype=np.uint8)
-    alto, ancho = roi.shape[:2]
-    etiquetas = asignar(__hsv_puntos(roi), centroides)
-    binaria = (etiquetas == cluster_linea).astype(np.uint8) * 255
-    return __limpiar(binaria.reshape(alto, ancho))
-
-
-def __mascara_umbral(
-    roi: NDArray[np.uint8], params: ParamsLinea
-) -> Mascara:
-    """Umbral fijo sobre el gris, descartando lo saturado.
-
-    El filtro de saturación no es un adorno: un PARE rojo (BGR 0,0,210) pesa
-    63 en gris, por debajo del umbral, y sin él la señal entera entra en la
-    máscara como si fuera línea. La línea real es oscura Y desaturada, el
-    mismo criterio que usa el modo K-Means.
-    """
-    gris = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gris, (5, 5), 0)
-    _, binaria = cv2.threshold(blur, params.umbral_gris, 255, cv2.THRESH_BINARY_INV)
-    saturacion = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)[:, :, 1]
-    binaria[saturacion >= params.saturacion_maxima] = 0
-    return __limpiar(binaria)
 
 
 def __segmento_dominante(
@@ -220,6 +137,20 @@ def __centroide_far(
     return None if distancia > params.salto_far_maximo else centro_far
 
 
+def __restaurar_ancho(mascara: Mascara, margen: int) -> Mascara:
+    """Devuelve la máscara en coordenadas del frame completo.
+
+    Con cortina el pipeline trabaja sobre un recorte, pero ``cx`` y
+    ``objetivo_px`` se reportan en el frame completo: si la máscara saliera
+    recortada, quien la dibuje la vería desplazada respecto a esos puntos.
+    """
+    if margen <= 0:
+        return mascara
+    alto = mascara.shape[0]
+    borde = np.zeros((alto, margen), dtype=mascara.dtype)
+    return np.hstack([borde, mascara, borde])
+
+
 def detectar_linea(
     frame: NDArray[np.uint8],
     params: ParamsLinea | None = None,
@@ -250,25 +181,26 @@ def detectar_linea(
 
     roi_cerca = __recortar(frame, p.roi_cerca)
     if p.modo == "kmeans":
-        centroides, cluster_linea = __ajustar_modelo(roi_cerca, p)
-        mascara_cerca = __mascara_kmeans(roi_cerca, centroides, cluster_linea)
+        centroides, cluster_linea = ajustar_modelo(roi_cerca, p)
+        mascara_cerca = mascara_kmeans(roi_cerca, centroides, cluster_linea)
     else:
-        mascara_cerca = __mascara_umbral(roi_cerca, p)
+        mascara_cerca = mascara_umbral(roi_cerca, p)
 
     cerca = __segmento_dominante(mascara_cerca, p, centro_atencion)
     if cerca is None and p.modo == "kmeans":
-        mascara_cerca = __mascara_umbral(roi_cerca, p)
+        mascara_cerca = mascara_umbral(roi_cerca, p)
         cerca = __segmento_dominante(mascara_cerca, p, centro_atencion)
+    mascara_completa = __restaurar_ancho(mascara_cerca, margen)
     if cerca is None:
-        return LineInfo(presente=False, mascara=mascara_cerca)
+        return LineInfo(presente=False, mascara=mascara_completa)
 
     cx, _masa, cobertura, ancho_segmento = cerca
 
     roi_lejos = __recortar(frame, p.roi_lejos)
     if p.modo == "kmeans":
-        mascara_lejos = __mascara_kmeans(roi_lejos, centroides, cluster_linea)
+        mascara_lejos = mascara_kmeans(roi_lejos, centroides, cluster_linea)
     else:
-        mascara_lejos = __mascara_umbral(roi_lejos, p)
+        mascara_lejos = mascara_umbral(roi_lejos, p)
     cx_far = __centroide_far(mascara_lejos, p, cx)
 
     error = cx - centro_frame
@@ -292,5 +224,5 @@ def detectar_linea(
         area=float(np.count_nonzero(mascara_cerca)),
         cobertura=cobertura,
         ancho_segmento=ancho_segmento,
-        mascara=mascara_cerca,
+        mascara=mascara_completa,
     )

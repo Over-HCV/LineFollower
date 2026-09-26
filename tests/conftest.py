@@ -26,6 +26,24 @@ def frame_con_linea(
     return frame
 
 
+def frame_con_dos_lineas(
+    x_principal: int = 160,
+    x_vecina: int = 40,
+    ancho_principal: int = 26,
+    ancho_vecina: int = 34,
+    ancho: int = 320,
+    alto: int = 240,
+) -> NDArray[np.uint8]:
+    """Dos líneas verticales: la propia y una vecina más gruesa en el borde.
+
+    Es el caso de la chicane y del ocho: la vecina tiene más masa y la misma
+    cobertura vertical, así que sin atención central se la lleva el gato.
+    """
+    frame = frame_con_linea(x_linea=x_principal, ancho_linea=ancho_principal, ancho=ancho, alto=alto)
+    frame[:, x_vecina - ancho_vecina // 2 : x_vecina + ancho_vecina // 2] = (45, 45, 45)
+    return frame
+
+
 def frame_con_octagono(
     color_bgr: tuple[int, int, int],
     centro: tuple[int, int] = (160, 80),

@@ -67,7 +67,19 @@ def test_separacion_acotada_al_rango_visible() -> None:
     _, _, lejos = ubicacion_signo(mundo, (px + nx * 500.0, py + ny * 500.0))
     _, _, encima = ubicacion_signo(mundo, (px, py))
     assert lejos == OFFSET_SIGNO_MAX
-    assert encima == OFFSET_SIGNO_MIN
+    assert encima == OFFSET_SIGNO_MIN == 0.0  # se puede dejar sobre la línea
+
+
+def test_senal_soltada_encima_queda_sobre_la_linea() -> None:
+    mundo = crear_mundo()
+    arrastre = Arrastre()
+    arrastre.tomar(mundo, mundo.posicion_signo(mundo.signos[0]))
+    arrastre.soltar(mundo, mundo.pista.punto(0.30))
+
+    signo = mundo.signos[0]
+    assert signo.offset == 0.0
+    centro = mundo.posicion_signo(signo)
+    assert mundo.pista.distancia_minima(centro) < 5.0
 
 
 def test_la_senal_tiene_prioridad_sobre_el_carrito() -> None:

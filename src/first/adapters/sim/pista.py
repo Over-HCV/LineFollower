@@ -15,16 +15,24 @@ from numpy.typing import NDArray
 
 from .lienzo import COLOR_LINEA
 
-PUNTOS_CONTROL: list[tuple[float, float]] = [
-    (1320.0, 600.0),
-    (1200.0, 1000.0),
-    (800.0, 1120.0),
-    (464.0, 936.0),
-    (280.0, 600.0),
-    (400.0, 200.0),
-    (800.0, 80.0),
-    (1136.0, 264.0),
-]
+def __pista_cacahuate(
+    cintura: float = 0.60, rx: float = 500.0, ry: float = 420.0, muestras: int = 24
+) -> list[tuple[float, float]]:
+    """Maní: dos lóbulos anchos unidos por una cintura estrecha.
+
+    El radio se modula con ``cos(2t)``: máximo en los extremos (los lóbulos)
+    y mínimo arriba y abajo (la cintura). Antes esta pista era una elipse sin
+    cintura, indistinguible del óvalo.
+    """
+    puntos: list[tuple[float, float]] = []
+    for i in range(muestras):
+        t = 2.0 * math.pi * i / muestras
+        forma = 1.0 + cintura * math.cos(2.0 * t)
+        puntos.append((800.0 + rx * forma * math.cos(t), 600.0 + ry * forma * math.sin(t)))
+    return puntos
+
+
+PUNTOS_CONTROL: list[tuple[float, float]] = __pista_cacahuate()
 
 
 def __pista_ovalo() -> list[tuple[float, float]]:
@@ -37,7 +45,7 @@ def __pista_ovalo() -> list[tuple[float, float]]:
     ]
 
 
-def __pista_chicane(lobulos: int = 6, amplitud: float = 40.0) -> list[tuple[float, float]]:
+def __pista_chicane(lobulos: int = 6, amplitud: float = 120.0) -> list[tuple[float, float]]:
     """Óvalo ondulado: cadena de curvas cóncavas y convexas encadenadas.
 
     El radio base se modula con una senoidal de ``lobulos`` periodos, así que
@@ -45,10 +53,10 @@ def __pista_chicane(lobulos: int = 6, amplitud: float = 40.0) -> list[tuple[floa
     los tramos vecinos quedan a ~220px, y la cámara abarca ±210px, o sea que
     casi siempre se ven DOS líneas y el detector tiene que elegir la propia.
 
-    La amplitud está calibrada para que el radio de curvatura mínimo sea
-    ~100px: el carrito gira con radio ~59px (PRESETS), así que las curvas son
-    exigentes pero tomables. La versión anterior tenía esquinas de 39px, por
-    debajo del radio de giro: eran físicamente imposibles.
+    Son 12 curvas alternas con radio mínimo ~74px, contra los ~59px de radio
+    de giro del carrito (95px/s ÷ 1.6rad/s de PRESETS): queda un 25% de
+    margen, que es lo justo para que sea difícil y no imposible. Medido: con
+    radio 59 (curvas al límite exacto) el carrito no completa ni una vuelta.
     """
     rx, ry = 530.0, 410.0
     muestras = lobulos * 8
