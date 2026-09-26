@@ -3,11 +3,15 @@
 Métricas en vivo estilo rúbrica: tiempo, vueltas, descarrilamientos,
 PAREs cumplidos e intervenciones humanas (las flechas cuentan como
 intervención, como en la competencia).
+
+El layout se calcula desde la métrica de la fuente para que ningún texto
+se corte sin importar el sistema o la fuente disponible.
 """
 
 from __future__ import annotations
 
 import math
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -16,17 +20,12 @@ from numpy.typing import NDArray
 
 from ...core.brain import Brain
 from ...core.types import Command, EstadoRobot
-from ...core.vision.line import ParamsLinea
 from .camera import CamaraSintetica
-from .world import LIENZO_ANCHO, Mundo  # LIENZO_ALTO
+from .world import LIENZO_ANCHO, Mundo
 
-ANCHO_VENTANA: int = 1180
-ALTO_VENTANA: int = 720
+MARGEN: int = 12
+INTER_LINEA: int = 26
 PANEL_MUNDO: tuple[int, int] = (760, 570)
-POS_CAMARA: tuple[int, int] = (785, 15)
-POS_MASCARA: tuple[int, int] = (785, 270)
-POS_TEXTO: tuple[int, int] = (785, 528)
-POS_AYUDA: tuple[int, int] = (12, 590)
 
 TECLAS_MANUAL: dict[int, Command] = {
     pygame.K_UP: Command.UP,
@@ -38,6 +37,7 @@ TECLAS_MANUAL: dict[int, Command] = {
 COLOR_TEXTO: tuple[int, int, int] = (230, 230, 230)
 COLOR_ACENTO: tuple[int, int, int] = (120, 220, 120)
 COLOR_ALERTA: tuple[int, int, int] = (240, 120, 120)
+COLOR_HUECO: tuple[int, int, int] = (240, 190, 90)
 
 
 def __a_superficie(imagen_bgr: NDArray[np.uint8]) -> pygame.Surface:
@@ -59,13 +59,12 @@ def ejecutar_simulador(
     brain: Brain,
     mundo: Mundo | None = None,
     camara: CamaraSintetica | None = None,
+    recrear: Callable[[], Mundo] | None = None,
     fps: int = 60,
 ) -> dict[str, float | int]:
     """Corre el simulador con la ventana pygame. Retorna métricas al cerrar."""
     pygame.init()
-    pantalla = pygame.display.set_mode((ANCHO_VENTANA, ALTO_VENTANA))
-    pygame.display.set_caption("Reto de visión: seguidor de línea (simulador)")
-    reloj = pygame.time.Clock()
+
     fuente = pygame.font.SysFont("menlo,consolas,monaco,monospace", 16)
     fuente_chica = pygame.font.SysFont("menlo,consolas,monaco,monospace", 13)
 
@@ -73,10 +72,44 @@ def ejecutar_simulador(
     camara = camara or CamaraSintetica()
     brain.reiniciar()
 
+    cam_w, cam_h = camara.tamaño_frame
+
+    lineas_referencia = [
+        "modo: MANUAL   comando: right   estado: recuperando",
+        "senal: siga   error: -999 px",
+        "t: 99999.9s   vueltas: 99   descarrilamientos: 99",
+        "PAREs cumplidos: 999   intervenciones: 999",
+    ]
+    ancho_texto = max(fuente.size(texto)[0] for texto in lineas_referencia)
+    ayuda = "A: auto/manual   R: reiniciar   flechas: manual (cuenta intervencion)   Q: salir"
+    ancho_ayuda = fuente_chica.size(ayuda)[0]
+
+    ancho_derecha = max(cam_w, ancho_texto) + 2 * MARGEN
+    ancho_ventana = MARGEN + PANEL_MUNDO[0] + MARGEN + ancho_derecha + MARGEN
+    ancho_ventana = max(ancho_ventana, ancho_ayuda + 2 * MARGEN)
+    alto_derecha = MARGEN + cam_h + MARGEN + cam_h + MARGEN + 4 * INTER_LINEA
+    alto_ayuda = PANEL_MUNDO[1] + INTER_LINEA + fuente_chica.get_height() + MARGEN
+    alto_ventana = max(alto_derecha, alto_ayuda) + MARGEN
+
+    pos_mundo = (MARGEN, MARGEN)
+    pos_ayuda = (MARGEN, MARGEN + PANEL_MUNDO[1] + INTER_LINEA // 2)
+    x_derecha = MARGEN + PANEL_MUNDO[0] + MARGEN
+    pos_camara = (x_derecha + (ancho_derecha - cam_w) // 2, MARGEN)
+    pos_mascara = (pos_camara[0], MARGEN + cam_h + MARGEN)
+    pos_texto = (x_derecha + MARGEN, pos_mascara[1] + cam_h + MARGEN)
+
+    pantalla = pygame.display.set_mode((ancho_ventana, alto_ventana))
+    pygame.display.set_caption("Reto de visión: seguidor de línea (simulador)")
+    reloj = pygame.time.Clock()
+
+    escala = PANEL_MUNDO[0] / LIENZO_ANCHO
+
+    def mundo_nuevo() -> Mundo:
+        return recrear() if recrear is not None else Mundo()
+
     mundo_superficie = pygame.transform.smoothscale(
         __a_superficie(mundo.lienzo), PANEL_MUNDO
     )
-    escala = PANEL_MUNDO[0] / LIENZO_ANCHO
 
     automatico: bool = True
     intervenciones: int = 0
@@ -99,16 +132,13 @@ def ejecutar_simulador(
                 elif evento.key == pygame.K_a:
                     automatico = not automatico
                 elif evento.key == pygame.K_r:
-                    mundo = Mundo()
+                    mundo = mundo_nuevo()
                     brain.reiniciar()
                     mundo_superficie = pygame.transform.smoothscale(
                         __a_superficie(mundo.lienzo), PANEL_MUNDO
                     )
                     intervenciones = 0
                     pares_cumplidos = 0
-                    mundo.t = 0.0
-                    mundo.vueltas = 0
-                    mundo.descarrilamientos = 0
 
         teclas = pygame.key.get_pressed()
         manual = next((c for k, c in TECLAS_MANUAL.items() if teclas[k]), None)
@@ -136,19 +166,21 @@ def ejecutar_simulador(
 
         panel = mundo_superficie.copy()
         cx, cy = mundo.carrito.x * escala, mundo.carrito.y * escala
-        pygame.draw.circle(panel, (60, 120, 255), (int(cx), int(cy)), 11)
+        color_estado = (
+            COLOR_ALERTA
+            if telemetria_estado == "pare"
+            else (COLOR_HUECO if telemetria_estado == "hueco" else (60, 120, 255))
+        )
+        pygame.draw.circle(panel, color_estado, (int(cx), int(cy)), 11)
         hx = cx + 20 * math.cos(mundo.carrito.theta)
         hy = cy + 20 * math.sin(mundo.carrito.theta)
-        color_estado = COLOR_ALERTA if telemetria_estado == "pare" else (60, 120, 255)
         pygame.draw.line(panel, color_estado, (cx, cy), (hx, hy), 4)
-        pantalla.blit(panel, (10, 10))
+        pantalla.blit(panel, pos_mundo)
 
         camara_vista = telemetria.debug if telemetria.debug is not None else frame
-        pantalla.blit(__a_superficie(camara_vista), POS_CAMARA)
-        mascara_frame = __mascara_a_frame(
-            telemetria.linea.mascara, (camara.tamaño_frame[0], camara.tamaño_frame[1])
-        )
-        pantalla.blit(__a_superficie(mascara_frame), POS_MASCARA)
+        pantalla.blit(__a_superficie(camara_vista), pos_camara)
+        mascara_frame = __mascara_a_frame(telemetria.linea.mascara, (cam_w, cam_h))
+        pantalla.blit(__a_superficie(mascara_frame), pos_mascara)
 
         modo = "AUTO" if automatico else "MANUAL"
         lineas = [
@@ -158,7 +190,8 @@ def ejecutar_simulador(
             ),
             (f"senal: {senal_texto}   error: {error_texto} px", COLOR_TEXTO),
             (
-                f"t: {mundo.t:6.1f}s   vueltas: {mundo.vueltas}   descarrilamientos: {mundo.descarrilamientos}",
+                f"t: {mundo.t:7.1f}s   vueltas: {mundo.vueltas}   "
+                f"descarrilamientos: {mundo.descarrilamientos}",
                 COLOR_TEXTO,
             ),
             (
@@ -168,11 +201,13 @@ def ejecutar_simulador(
         ]
         for i, (texto, color) in enumerate(lineas):
             pantalla.blit(
-                fuente.render(texto, True, color), (POS_TEXTO[0], POS_TEXTO[1] + i * 24)
+                fuente.render(texto, True, color),
+                (pos_texto[0], pos_texto[1] + i * INTER_LINEA),
             )
 
-        ayuda = "A: auto/manual   R: reiniciar   flechas: manual (cuenta intervencion)   Q: salir"
-        pantalla.blit(fuente_chica.render(ayuda, True, (150, 150, 150)), POS_AYUDA)
+        pantalla.blit(
+            fuente_chica.render(ayuda, True, (150, 150, 150)), pos_ayuda
+        )
 
         pygame.display.flip()
 
@@ -184,17 +219,3 @@ def ejecutar_simulador(
         "pares_cumplidos": pares_cumplidos,
         "intervenciones": intervenciones,
     }
-
-
-def ejecutar_desde_cli(
-    segundos_pare: float,
-    tolerancia: int,
-    params_linea: ParamsLinea,
-) -> dict[str, float | int]:
-    """Fábrica simple para el CLI: construye Brain y lanza la ventana."""
-    brain = Brain(
-        segundos_pare=segundos_pare,
-        tolerancia_entrada=tolerancia,
-        params_linea=params_linea,
-    )
-    return ejecutar_simulador(brain)

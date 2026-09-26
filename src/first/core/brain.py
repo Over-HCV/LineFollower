@@ -35,6 +35,9 @@ class Brain:
         confirmar_pare: int = 3,
         confirmar_siga: int = 2,
         cooldown_pare: float = 4.0,
+        umbral_hueco: float = 40.0,  # error máximo para asumir hueco (px)
+        tolerancia_hueco: float = 0.45,  # dead-reckoning recto hasta (s)
+        cobertura_recaptura: float = 0.6,  # candidato debe cruzar la franja
         area_minima_senal: float = 900.0,
         timeout_recuperacion: float = 3.0,
         params_linea: ParamsLinea | None = None,
@@ -47,6 +50,9 @@ class Brain:
         self.confirmar_pare = confirmar_pare
         self.confirmar_siga = confirmar_siga
         self.cooldown_pare = cooldown_pare
+        self.umbral_hueco = umbral_hueco
+        self.tolerancia_hueco = tolerancia_hueco
+        self.cobertura_recaptura = cobertura_recaptura
         self.params_linea = params_linea or ParamsLinea()
         self.dibujar_debug = dibujar_debug
 
@@ -62,6 +68,7 @@ class Brain:
         self.__contador_recuperacion: int = 0
         self.__ausencias: int = 0  # frames seguidos sin línea (debounce)
         self.__ultimo_comando: Command = Command.UP
+        self.__ultimo_error: float = 0.0  # error del último frame con línea
         self.__t_pare: float | None = None
         self.__t_perdida: float | None = None
         self.__bloqueo_senal: Senal | None = None
@@ -75,6 +82,10 @@ class Brain:
         self.__t_pare = None
         self.__t_perdida = None
         self.__bloqueo_senal = None
+        self.__cooldown_hasta = 0.0
+        self.__ausencias = 0
+        self.__ultimo_comando = Command.UP
+        self.__ultimo_error = 0.0
 
     def procesar(self, frame: NDArray[np.uint8] | None) -> tuple[Command, Telemetry]:
         """Procesa un frame BGR y retorna el comando único más la telemetría."""
@@ -181,17 +192,28 @@ class Brain:
             error = linea.objetivo_px - frame.shape[1] // 2
             if error != 0:
                 self.__signo_ultimo_error = 1 if error > 0 else -1
+            self.__ultimo_error = float(error)
 
-            if self.estado in (EstadoRobot.RECUPERANDO, EstadoRobot.PERDIDO):
-                # Recaptura: solo se devuelve el control normal cuando la
-                # línea quedó aproximadamente centrada en el campo de visión.
-                if abs(error) < 120:
-                    self.estado = EstadoRobot.SIGUIENDO
-                    self.__control.reiniciar()
-                else:
-                    return (
-                        Command.RIGHT if error > 0 else Command.LEFT
-                    ), linea
+            if self.estado in (
+                EstadoRobot.HUECO,
+                EstadoRobot.RECUPERANDO,
+                EstadoRobot.PERDIDO,
+            ):
+                # Recaptura: el candidato debe ser una línea de verdad: cruza
+                # la franja (cobertura alta) o es un segmento ancho típico de
+                # esquina. Una mancha es compacta en ambas dimensiones.
+                es_linea = (
+                    linea.cobertura >= self.cobertura_recaptura
+                    or linea.ancho_segmento >= 55
+                )
+                if es_linea:
+                    if abs(error) < 120:
+                        self.estado = EstadoRobot.SIGUIENDO
+                        self.__control.reiniciar()
+                    else:
+                        return (
+                            Command.RIGHT if error > 0 else Command.LEFT
+                        ), linea
 
             if self.estado is EstadoRobot.SIGUIENDO:
                 self.__ausencias = 0
@@ -203,12 +225,25 @@ class Brain:
         if self.estado is EstadoRobot.SIGUIENDO:
             self.__ausencias += 1
             if self.__ausencias >= 3:
-                self.estado = EstadoRobot.RECUPERANDO
+                # Diagnóstico de la pérdida: si venía bien centrado es un
+                # hueco del trazo (seguir recto); si venía desviado, girar.
+                if abs(self.__ultimo_error) < self.umbral_hueco:
+                    self.estado = EstadoRobot.HUECO
+                else:
+                    self.estado = EstadoRobot.RECUPERANDO
                 self.__t_perdida = ahora
                 self.__control.reiniciar()
             else:
                 # Tolerancia al parpadeo: mantener el último comando válido.
                 return self.__ultimo_comando, linea
+        if self.estado is EstadoRobot.HUECO:
+            assert self.__t_perdida is not None
+            if ahora - self.__t_perdida <= self.tolerancia_hueco:
+                # Dead-reckoning: el trazo es discontinuo y se cruza RECTO.
+                # Congelar un giro aquí haría girar en ciego y descarrilar.
+                return Command.UP, linea
+            self.estado = EstadoRobot.RECUPERANDO
+            self.__t_perdida = ahora
         if self.estado is EstadoRobot.RECUPERANDO:
             assert self.__t_perdida is not None
             if ahora - self.__t_perdida <= self.timeout_recuperacion:

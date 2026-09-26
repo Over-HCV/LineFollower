@@ -31,6 +31,20 @@ def construir_parser() -> argparse.ArgumentParser:
         help="fuente de frames (por defecto: simulador pygame)",
     )
     parser.add_argument(
+        "--pista",
+        "--lap",
+        dest="pista",
+        choices=["cacahuate", "ovalo", "ocho", "chicane"],
+        default="cacahuate",
+        help="diseño de la pista del simulador (alias: --lap)",
+    )
+    parser.add_argument(
+        "--realismo",
+        choices=["perfecto", "medio", "realista", "extremo"],
+        default="perfecto",
+        help="imperfecciones del trazo: ancho variable, huecos, manchas",
+    )
+    parser.add_argument(
         "--video",
         type=Path,
         default=None,
@@ -51,7 +65,7 @@ def construir_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tolerancia",
         type=int,
-        default=25,
+        default=12,
         help="umbral de entrada al giro en píxeles",
     )
     parser.add_argument(
@@ -78,8 +92,15 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.source == "sim":
         from .adapters.sim.pygame_ui import ejecutar_simulador
+        from .adapters.sim.world import PISTAS, REALISMOS, Mundo, Pista
 
-        ejecutar_simulador(brain)
+        puntos = PISTAS[args.pista]
+        realismo = REALISMOS[args.realismo]
+        ejecutar_simulador(
+            brain,
+            mundo=Mundo(pista=Pista(puntos), realismo=realismo),
+            recrear=lambda: Mundo(pista=Pista(puntos), realismo=realismo),
+        )
     elif args.source == "webcam":
         from .adapters.bucle_cv2 import bucle_cv2
         from .adapters.webcam import WebcamSource

@@ -23,6 +23,7 @@ class EstadoRobot(str, Enum):
 
     SIGUIENDO = "siguiendo"
     PARE = "pare"
+    HUECO = "hueco"  # trazo discontinuo: dead-reckoning en línea recta
     RECUPERANDO = "recuperando"
     PERDIDO = "perdido"
 
@@ -45,6 +46,8 @@ class LineInfo:
     cx: int = 0
     cy: int = 0
     area: float = 0.0
+    cobertura: float = 0.0  # fracción de filas de la franja que cruza el segmento
+    ancho_segmento: int = 0  # ancho horizontal del bbox del segmento (px)
     mascara: NDArray[np.uint8] | None = None
 
 

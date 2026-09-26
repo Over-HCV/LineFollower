@@ -1,8 +1,12 @@
-"""Mundo simulado: pista cerrada (spline Catmull-Rom), señales y carrito.
+"""Mundo simulado: pistas cerradas (spline Catmull-Rom), señales y carrito.
 
 La física es deliberadamente simple: cada comando discreto es un preset
 (velocidad, giro) de un modelo tipo diferencial que gira mientras avanza.
 La misma tabla de presets es la que se mapearía al Arduino real.
+
+El realismo de la pista modela imperfecciones del trazo real: ancho
+variable, temblor del trazo, huecos (trazo discontinuo) y manchas de
+suciedad oscuras cerca de la línea.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ LIENZO_ALTO: int = 1200
 
 COLOR_SUELO: tuple[int, int, int] = (205, 205, 205)
 COLOR_LINEA: tuple[int, int, int] = (40, 40, 40)
+COLOR_LINEA_CLARA: tuple[int, int, int] = (98, 94, 90)  # marcador descargado
 COLOR_SENAL: dict[Senal, tuple[int, int, int]] = {
     Senal.PARE: (0, 0, 210),  # BGR
     Senal.SIGA: (0, 190, 0),
@@ -37,12 +42,125 @@ PUNTOS_CONTROL: list[tuple[float, float]] = [
     (1136.0, 264.0),
 ]
 
+
+def __pista_ovalo() -> list[tuple[float, float]]:
+    return [
+        (
+            800.0 + 520.0 * math.cos(k * 2.0 * math.pi / 12.0),
+            600.0 + 470.0 * math.sin(k * 2.0 * math.pi / 12.0),
+        )
+        for k in range(12)
+    ]
+
+
+def __pista_ocho() -> list[tuple[float, float]]:
+    """Lemniscata: la línea se cruza a sí misma en el centro (como el ocho)."""
+    return [
+        (
+            800.0 + 560.0 * math.sin(k * 2.0 * math.pi / 16.0),
+            600.0 + 430.0 * math.sin(2.0 * k * 2.0 * math.pi / 16.0),
+        )
+        for k in range(16)
+    ]
+
+
+PISTAS: dict[str, list[tuple[float, float]]] = {
+    "cacahuate": PUNTOS_CONTROL,
+    "ovalo": __pista_ovalo(),
+    "ocho": __pista_ocho(),
+    "chicane": [
+        (260.0, 260.0),
+        (1340.0, 260.0),
+        (1340.0, 940.0),
+        (1010.0, 940.0),
+        (1010.0, 640.0),
+        (790.0, 640.0),
+        (790.0, 940.0),
+        (260.0, 940.0),
+    ],
+}
+
 # (velocidad en px/s, giro en rad/s): girar avanzando.
+# Radio de giro ~59px: calibrado para curvas suaves sin sobreoscilar; las
+# esquinas de 90° cerradas (pista 'chicane') son el caso límite conocido.
 PRESETS: dict[Command, tuple[float, float]] = {
     Command.UP: (115.0, 0.0),
     Command.LEFT: (95.0, -1.6),
     Command.RIGHT: (95.0, 1.6),
     Command.DOWN: (0.0, 0.0),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Realismo:
+    """Imperfecciones del trazo real aplicadas al render de la pista.
+
+    - ancho variable y jitter: el trazo humano no es uniforme ni recto.
+    - huecos: trazo discontinuo (el marcador se corta).
+    - manchas: suciedad oscura cerca de la línea (falsos candidatos).
+    - tramos partidos: la línea se divide en 2 trazos paralelos (marcador
+      que raya o cinta rasgada).
+    - reflejos: brillo especular blanco SOBRE la línea (la rompe visualmente).
+    - degradado: tramos con marcador descargado (color más claro).
+    """
+
+    ancho_min: float = 26.0
+    ancho_max: float = 26.0
+    jitter: float = 0.0  # desvío perpendicular suave del trazo (px)
+    gap_fraccion: float = 0.0  # fracción de la longitud total con huecos
+    gap_largo_min: float = 15.0
+    gap_largo_max: float = 40.0
+    manchas: int = 0
+    mancha_radio_min: float = 10.0
+    mancha_radio_max: float = 26.0
+    mancha_lateral_min: float = 32.0
+    reflejos: int = 0  # brillos blancos sobre la línea
+    reflejo_largo_min: float = 25.0
+    reflejo_largo_max: float = 70.0
+    reflejo_ancho_max: float = 14.0
+    tramos_partidos: int = 0  # tramos con la línea partida en paralelo
+    partido_largo_min: float = 80.0
+    partido_largo_max: float = 200.0
+    degradado_fraccion: float = 0.0  # fracción con marcador descargado
+    semilla: int = 11
+
+
+REALISMOS: dict[str, Realismo | None] = {
+    "perfecto": None,
+    "medio": Realismo(
+        ancho_min=18.0,
+        ancho_max=26.0,
+        jitter=3.0,
+        reflejos=2,
+    ),
+    "realista": Realismo(
+        ancho_min=15.0,
+        ancho_max=28.0,
+        jitter=6.0,
+        gap_fraccion=0.04,
+        gap_largo_min=15.0,
+        gap_largo_max=35.0,
+        manchas=6,
+        mancha_radio_min=8.0,
+        mancha_radio_max=20.0,
+        mancha_lateral_min=45.0,
+        reflejos=3,
+        reflejo_largo_max=55.0,
+        tramos_partidos=1,
+        degradado_fraccion=0.08,
+    ),
+    "extremo": Realismo(
+        ancho_min=12.0,
+        ancho_max=30.0,
+        jitter=10.0,
+        gap_fraccion=0.10,
+        gap_largo_min=20.0,
+        gap_largo_max=60.0,
+        manchas=15,
+        reflejos=6,
+        tramos_partidos=3,
+        degradado_fraccion=0.15,
+    ),
 }
 
 
@@ -170,15 +288,18 @@ class Mundo:
         self,
         pista: Pista | None = None,
         signos: list[Signo] | None = None,
+        realismo: Realismo | None = None,
         umbral_descarrilamiento: float = 42.0,
     ) -> None:
         self.pista = pista or Pista()
         self.signos = signos if signos is not None else list(SIGNOS_BASE)
+        self.realismo = realismo
         self.umbral_descarrilamiento = umbral_descarrilamiento
 
         x0, y0 = self.pista.punto(0.0)
         tx, ty = self.pista.tangente(0.0)
         self.carrito = Carrito(x0, y0, math.atan2(ty, tx))
+        self.__idx_prev: int = 0
         self.lienzo = self.__renderizar()
 
         self.t: float = 0.0
@@ -203,7 +324,13 @@ class Mundo:
 
     def __renderizar(self) -> NDArray[np.uint8]:
         lienzo = np.full((LIENZO_ALTO, LIENZO_ANCHO, 3), COLOR_SUELO, dtype=np.uint8)
-        self.pista.dibujar(lienzo)
+        rng = np.random.default_rng(self.realismo.semilla if self.realismo else 0)
+        if self.realismo is None:
+            self.pista.dibujar(lienzo)
+        else:
+            self.__dibujar_manchas(lienzo, rng)
+            self.__dibujar_trazo_realista(lienzo, rng)
+            self.__dibujar_reflejos(lienzo, rng)
         for signo in self.signos:
             centro = self.__posicion_signo(signo)
             cv2.fillPoly(
@@ -213,13 +340,272 @@ class Mundo:
             )
         return lienzo
 
-    def progreso(self) -> float:
-        """Fracción de pista (0-1) más cercana al carrito."""
-        distancias = (
-            (self.pista.puntos[:, 0] - self.carrito.x) ** 2
-            + (self.pista.puntos[:, 1] - self.carrito.y) ** 2
+    def __dibujar_trazo_realista(
+        self, lienzo: NDArray[np.uint8], rng: np.random.Generator
+    ) -> None:
+        """Dibuja la línea por tramos: ancho variable, temblor y huecos."""
+        r = self.realismo
+        assert r is not None
+        p = self.pista.puntos
+        n = len(p)
+        cerrado = np.vstack([p, p[:1]])
+        seg = np.linalg.norm(np.diff(cerrado, axis=0), axis=1)
+        paso = float(seg.mean())
+        s_arc = np.concatenate([[0.0], np.cumsum(seg)])[:n]
+        largo_total = float(seg.sum())
+        t_norm = s_arc / largo_total
+
+        f1, f2 = rng.uniform(2.0, 4.0), rng.uniform(5.0, 9.0)
+        p1, p2 = rng.uniform(0.0, 2.0 * np.pi, 2)
+        modulacion = (
+            0.5
+            + 0.35 * np.sin(2.0 * np.pi * f1 * t_norm + p1)
+            + 0.15 * np.sin(2.0 * np.pi * f2 * t_norm + p2)
         )
-        return float(distancias.argmin()) / len(self.pista.puntos)
+        ancho = r.ancho_min + (r.ancho_max - r.ancho_min) * np.clip(modulacion, 0, 1)
+
+        f3, f4 = rng.uniform(3.0, 6.0), rng.uniform(8.0, 14.0)
+        p3, p4 = rng.uniform(0.0, 2.0 * np.pi, 2)
+        desvio = r.jitter * (
+            0.6 * np.sin(2.0 * np.pi * f3 * t_norm + p3)
+            + 0.4 * np.sin(2.0 * np.pi * f4 * t_norm + p4)
+        )
+
+        tangentes = cerrado[1:] - cerrado[:-1]
+        normas = np.linalg.norm(tangentes, axis=1, keepdims=True)
+        normas[normas == 0.0] = 1.0
+        tangentes = tangentes / normas
+        normales = np.stack([-tangentes[:, 1], tangentes[:, 0]], axis=1)
+        puntos_mod = p + normales * desvio[:, None]
+
+        hueco = self.__generar_huecos(rng, paso, largo_total)
+        partido = self.__tramos_aleatorios(
+            rng, r.tramos_partidos, r.partido_largo_min, r.partido_largo_max, paso
+        )
+        if r.degradado_fraccion > 0.0:
+            cantidad_degradada = max(
+                1, int(round(r.degradado_fraccion * largo_total / 175.0))
+            )
+        else:
+            cantidad_degradada = 0
+        degradado = self.__tramos_aleatorios(rng, cantidad_degradada, 100.0, 250.0, paso)
+
+        for i in range(n):
+            if hueco[i]:
+                continue
+            j = (i + 1) % n
+            if hueco[j]:
+                continue
+            a = puntos_mod[i]
+            b = puntos_mod[j]
+            color = COLOR_LINEA_CLARA if degradado[i] else COLOR_LINEA
+            if partido[i]:
+                # Línea partida en dos trazos paralelos (marcador que raya):
+                # el segmento dominante debe elegir uno y el sesgo queda
+                # dentro de la banda muerta del control.
+                separacion = ancho[i] * 0.30
+                sub_ancho = max(5, int(round(ancho[i] * 0.38)))
+                for lado in (-1.0, 1.0):
+                    cv2.line(
+                        lienzo,
+                        (
+                            int(round(a[0] + normales[i, 0] * lado * separacion)),
+                            int(round(a[1] + normales[i, 1] * lado * separacion)),
+                        ),
+                        (
+                            int(round(b[0] + normales[j, 0] * lado * separacion)),
+                            int(round(b[1] + normales[j, 1] * lado * separacion)),
+                        ),
+                        color,
+                        sub_ancho,
+                    )
+            else:
+                cv2.line(
+                    lienzo,
+                    (int(round(a[0])), int(round(a[1]))),
+                    (int(round(b[0])), int(round(b[1]))),
+                    color,
+                    thickness=max(1, int(round(ancho[i]))),
+                )
+
+    def __generar_huecos(
+        self, rng: np.random.Generator, paso: float, largo_total: float
+    ) -> NDArray[np.bool_]:
+        """Huecos solo en zonas rectas, lejos de señales y de la meta."""
+        r = self.realismo
+        assert r is not None
+        p = self.pista.puntos
+        n = len(p)
+        hueco = np.zeros(n, dtype=np.bool_)
+        if r.gap_fraccion <= 0.0:
+            return hueco
+
+        d1 = p - np.roll(p, 1, axis=0)
+        d2 = np.roll(p, -1, axis=0) - p
+        cos = (d1 * d2).sum(axis=1) / (
+            np.linalg.norm(d1, axis=1) * np.linalg.norm(d2, axis=1)
+        )
+        angulo = np.arccos(np.clip(cos, -1.0, 1.0))
+        curvatura = np.convolve(angulo, np.ones(31) / 31.0, mode="same")
+        permitido = curvatura < (paso / 420.0)  # solo zonas rectas (r >= ~420px)
+
+        radio_idx = max(1, int(90.0 / paso))
+        for signo in self.signos:
+            centro = self.pista.indice(signo.s)
+            for k in range(-radio_idx, radio_idx + 1):
+                permitido[(centro + k) % n] = False
+        for k in range(-40, 41):
+            permitido[k % n] = False  # zona de meta
+
+        objetivo = r.gap_fraccion * largo_total
+        colocado = 0.0
+        candidatos = np.where(permitido)[0]
+        margen = max(1, int(120.0 / paso))
+        while colocado < objetivo and len(candidatos) > 0:
+            i0 = int(rng.choice(candidatos))
+            largo = float(rng.uniform(r.gap_largo_min, r.gap_largo_max))
+            extension = min(int(largo / paso) + 1, n // 6)
+            hueco[i0 : i0 + extension] = True
+            colocado += largo
+            candidatos = candidatos[
+                (candidatos < i0 - margen) | (candidatos > i0 + extension + margen)
+            ]
+        return hueco
+
+    def __tramos_aleatorios(
+        self,
+        rng: np.random.Generator,
+        cantidad: int,
+        largo_min: float,
+        largo_max: float,
+        paso: float,
+    ) -> NDArray[np.bool_]:
+        """Tramos aleatorios de la pista, lejos de señales y de la meta."""
+        n = len(self.pista.puntos)
+        mascara = np.zeros(n, dtype=np.bool_)
+        if cantidad <= 0:
+            return mascara
+        excluidos = np.zeros(n, dtype=np.bool_)
+        for signo in self.signos:
+            centro = self.pista.indice(signo.s)
+            radio = max(1, int(90.0 / paso))
+            for k in range(-radio, radio + 1):
+                excluidos[(centro + k) % n] = True
+        for k in range(-40, 41):
+            excluidos[k % n] = True  # zona de meta
+        candidatos = np.where(~excluidos)[0]
+        margen = max(1, int(100.0 / paso))
+        colocados = 0
+        intentos = 0
+        while colocados < cantidad and intentos < cantidad * 20 and len(candidatos) > 0:
+            intentos += 1
+            i0 = int(rng.choice(candidatos))
+            extension = int(rng.uniform(largo_min, largo_max) / paso) + 1
+            mascara[i0 : i0 + extension] = True
+            colocados += 1
+            candidatos = candidatos[
+                (candidatos < i0 - margen) | (candidatos > i0 + extension + margen)
+            ]
+        return mascara
+
+    def __dibujar_reflejos(
+        self, lienzo: NDArray[np.uint8], rng: np.random.Generator
+    ) -> None:
+        """Brillo especular blanco sobre la línea (reflejo de la luz).
+
+        El reflejo no borra la geometría: la línea sigue ahí, pero la cámara
+        la ve rota en pedazos. El modo hueco del cerebro debe cruzarla recto.
+        """
+        r = self.realismo
+        assert r is not None
+        if r.reflejos <= 0:
+            return
+        p = self.pista.puntos
+        n = len(p)
+        idx_signos = [self.pista.indice(sg.s) for sg in self.signos]
+        colocados = 0
+        intentos = 0
+        while colocados < r.reflejos and intentos < r.reflejos * 20:
+            intentos += 1
+            i = int(rng.integers(0, n))
+            if any(abs((i - i0 + n // 2) % n - n // 2) < 30 for i0 in idx_signos):
+                continue
+            tx, ty = self.pista.tangente(i / n)
+            largo = float(rng.uniform(r.reflejo_largo_min, r.reflejo_largo_max))
+            ancho_r = float(rng.uniform(6.0, r.reflejo_ancho_max))
+            brillo = int(rng.uniform(215.0, 242.0))
+            color = (brillo, brillo - 2, brillo - 4)  # blanco grisáceo, S baja
+            cv2.ellipse(
+                lienzo,
+                (int(round(p[i, 0])), int(round(p[i, 1]))),
+                (int(round(largo / 2.0)), int(round(ancho_r / 2.0))),
+                math.degrees(math.atan2(ty, tx)),
+                0.0,
+                360.0,
+                color,
+                -1,
+            )
+            colocados += 1
+
+    def __dibujar_manchas(
+        self, lienzo: NDArray[np.uint8], rng: np.random.Generator
+    ) -> None:
+        """Manchas de suciedad oscuras y desaturadas junto a la línea."""
+        r = self.realismo
+        assert r is not None
+        if r.manchas <= 0:
+            return
+        p = self.pista.puntos
+        n = len(p)
+        idx_signos = [self.pista.indice(sg.s) for sg in self.signos]
+        colocadas = 0
+        intentos = 0
+        while colocadas < r.manchas and intentos < r.manchas * 20:
+            intentos += 1
+            i = int(rng.integers(0, n))
+            if any(
+                abs((i - i0 + n // 2) % n - n // 2) < 30 for i0 in idx_signos
+            ):
+                continue
+            lado = 1 if rng.random() < 0.5 else -1
+            lateral = lado * float(rng.uniform(r.mancha_lateral_min, 120.0))
+            tx, ty = self.pista.tangente(i / n)
+            cx = p[i, 0] - ty * lateral
+            cy = p[i, 1] + tx * lateral
+            eje_a = float(rng.uniform(r.mancha_radio_min, r.mancha_radio_max))
+            eje_b = eje_a * float(rng.uniform(0.5, 0.9))
+            gris = int(rng.uniform(60.0, 110.0))
+            color = (gris, gris - int(rng.uniform(0, 8)), gris - int(rng.uniform(0, 8)))
+            cv2.ellipse(
+                lienzo,
+                (int(round(cx)), int(round(cy))),
+                (int(round(eje_a)), int(round(eje_b))),
+                float(rng.uniform(0.0, 180.0)),
+                0.0,
+                360.0,
+                color,
+                -1,
+            )
+            colocadas += 1
+
+    def progreso(self) -> float:
+        """Fracción de pista (0-1) más cercana al carrito.
+
+        Con histéresis de rama: en pistas que se acercan a sí mismas (el
+        ocho) el índice global más cercano puede saltar de lóbulo; se
+        restringe la búsqueda a una ventana del último índice visitado.
+        """
+        p = self.pista.puntos
+        n = len(p)
+        d2 = (p[:, 0] - self.carrito.x) ** 2 + (p[:, 1] - self.carrito.y) ** 2
+        ventana = 60
+        indices = (self.__idx_prev + np.arange(-ventana, ventana + 1)) % n
+        mejor_local = int(indices[int(np.argmin(d2[indices]))])
+        if d2[mejor_local] <= 200.0**2:
+            self.__idx_prev = mejor_local
+        else:
+            self.__idx_prev = int(d2.argmin())
+        return self.__idx_prev / n
 
     def paso(self, comando: Command, dt: float) -> None:
         """Integra el preset del comando durante dt y actualiza métricas."""

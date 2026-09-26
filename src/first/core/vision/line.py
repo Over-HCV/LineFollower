@@ -34,7 +34,7 @@ class ParamsLinea:
     umbral_gris: int = 70
     k_kmeans: int = 3
     submuestreo: int = 6
-    masa_minima: float = 800.0  # masa mínima del segmento dominante
+    masa_minima: float = 350.0  # masa mínima del segmento (trazos delgados)
     masa_maxima: float = 5000.0  # demasiada línea visible = no es línea
     peso_mirada: float = 0.45
     anticipacion_maxima: float = 30.0
@@ -52,7 +52,8 @@ def __recortar(
 
 
 def __limpiar(mascara: Mascara) -> Mascara:
-    kernel = np.ones((5, 5), np.uint8)
+    # Kernel 3x3: un kernel mayor borra trazos delgados reales (ancho variable).
+    kernel = np.ones((3, 3), np.uint8)
     mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, kernel)
     return cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, kernel)
 
@@ -104,15 +105,18 @@ def __mascara_umbral(
 
 def __segmento_dominante(
     mascara: Mascara, params: ParamsLinea
-) -> tuple[int, float] | None:
+) -> tuple[int, float, float, int] | None:
     """Centroide del segmento de línea dominante, al estilo sensor IR.
 
     1. Escanea las filas inferiores (la línea que el robot pisa) y arma el
        histograma de columnas; los grupos contiguos son segmentos candidatos.
-    2. Elige el de mayor masa (empate: el más cercano al centro).
+    2. Elige por (cobertura vertical, masa, cercanía al centro): una línea
+       real atraviesa toda la franja de arriba a abajo, mientras que una
+       mancha de suciedad es compacta y no la cubre.
     3. Calcula el centroide ponderado por fila solo en ese segmento.
 
-    Así, en un codo con dos segmentos visibles nunca promedia entre ambos.
+    Así, en un codo con dos segmentos visibles nunca promedia entre ambos,
+    y las manchas oscuras del piso no suplantan a la línea.
     """
     alto, ancho = mascara.shape[:2]
     banda = mascara[alto - max(4, alto // 4) :, :]  # ~25% inferior
@@ -141,24 +145,21 @@ def __segmento_dominante(
     indices = np.arange(ancho, dtype=np.float64)
 
     centro = ancho // 2
-    mejor: tuple[float, int, int] | None = None  # (masa, x0, x1)
-    for x0, x1 in grupos:
+
+    def criterio(x0: int, x1: int) -> tuple[int, float, float]:
         masa = float(columnas[x0 : x1 + 1].sum())
-        if mejor is None or masa > mejor[0] + 1e-6:
-            mejor = (masa, x0, x1)
-        elif abs(masa - mejor[0]) <= 1e-6:
-            # empate: gana el grupo más cercano al centro del frame
-            c_nuevo = (x0 + x1) / 2
-            c_mejor = (mejor[1] + mejor[2]) / 2
-            if abs(c_nuevo - centro) < abs(c_mejor - centro):
-                mejor = (masa, x0, x1)
-    if mejor is None:
-        return None
-    masa, x0, x1 = mejor
+        cobertura = int(np.count_nonzero((mascara[:, x0 : x1 + 1] > 0).any(axis=1)))
+        cercania = -abs((x0 + x1) / 2.0 - centro)
+        return cobertura, masa, cercania
+
+    x0, x1 = max(grupos, key=lambda g: criterio(g[0], g[1]))
+    masa = float(columnas[x0 : x1 + 1].sum())
     if masa < params.masa_minima or masa > params.masa_maxima:
         return None
+    filas_cubiertas = np.count_nonzero((mascara[:, x0 : x1 + 1] > 0).any(axis=1))
+    cobertura = float(filas_cubiertas) / float(alto)
     cx = float((columnas[x0 : x1 + 1] * indices[x0 : x1 + 1]).sum() / masa)
-    return int(cx), masa
+    return int(cx), masa, cobertura, int(x1 - x0 + 1)
 
 
 def __centroide_far(
@@ -204,7 +205,7 @@ def detectar_linea(
     if cerca is None:
         return LineInfo(presente=False, mascara=mascara_cerca)
 
-    cx, _masa = cerca
+    cx, _masa, cobertura, ancho_segmento = cerca
 
     roi_lejos = __recortar(frame, p.roi_lejos)
     if p.modo == "kmeans":
@@ -232,5 +233,7 @@ def detectar_linea(
         cx=cx,
         cy=0,
         area=float(np.count_nonzero(mascara_cerca)),
+        cobertura=cobertura,
+        ancho_segmento=ancho_segmento,
         mascara=mascara_cerca,
     )
