@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import replace
-from typing import Callable
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -98,6 +98,7 @@ class Brain:
         segundos_pare: float | None = None,
         modo_linea: str | None = None,
         tolerancia_hueco: float | None = None,
+        margen_lateral: int | None = None,
     ) -> None:
         """Ajusta parámetros en caliente SIN reiniciar la máquina de estados.
 
@@ -119,10 +120,19 @@ class Brain:
             )
         if segundos_pare is not None:
             self.segundos_pare = max(0.0, segundos_pare)
+        cambios: dict[str, Any] = {}
         if modo_linea is not None:
-            self.params_linea = replace(self.params_linea, modo=modo_linea)
+            cambios["modo"] = modo_linea
+        if margen_lateral is not None:
+            cambios["margen_lateral"] = max(0, margen_lateral)
+        if cambios:
+            self.params_linea = replace(self.params_linea, **cambios)
         if tolerancia_hueco is not None:
             self.tolerancia_hueco = max(0.0, tolerancia_hueco)
+
+    def fijar_reloj(self, reloj: Reloj) -> None:
+        """Cambia el reloj en vivo (para sincronizar con tiempo simulado)."""
+        self.__reloj = reloj
 
     def procesar(self, frame: NDArray[np.uint8] | None) -> tuple[Command, Telemetry]:
         """Procesa un frame BGR y retorna el comando único más la telemetría."""

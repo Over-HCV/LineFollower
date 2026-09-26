@@ -11,7 +11,8 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from .world import COLOR_SUELO, Carrito, Mundo
+from .lienzo import COLOR_SUELO
+from .world import Carrito, Mundo
 
 
 class CamaraSintetica:

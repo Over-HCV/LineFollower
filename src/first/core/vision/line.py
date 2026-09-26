@@ -39,6 +39,7 @@ class ParamsLinea:
     peso_mirada: float = 0.45
     anticipacion_maxima: float = 30.0
     ancho_far_maximo: float = 90.0  # bbox más ancho = línea cruzando
+    margen_lateral: int = 0  # cortina: columnas ignoradas a cada lado (px)
     modo: str = "kmeans"  # "kmeans" | "umbral"
 
 
@@ -186,8 +187,18 @@ def __centroide_far(
 def detectar_linea(
     frame: NDArray[np.uint8], params: ParamsLinea | None = None
 ) -> LineInfo:
-    """Localiza la línea bajo el robot y calcula el objetivo de dirección."""
+    """Localiza la línea bajo el robot y calcula el objetivo de dirección.
+
+    La cortina lateral (``margen_lateral``) recorta columnas simétricas a
+    cada lado ANTES de procesar: una línea "fantasma" en el borde (p. ej. el
+    tramo anterior de la pista en una chicane) deja de existir para el
+    detector. Las coordenadas devueltas se trasladan de vuelta al espacio
+    del frame completo para que el error quede referido al mismo centro.
+    """
     p = params or ParamsLinea()
+    margen = max(0, min(int(p.margen_lateral), frame.shape[1] // 2 - 20))
+    if margen:
+        frame = frame[:, margen : frame.shape[1] - margen]
     ancho = frame.shape[1]
     centro_frame = ancho // 2
 
@@ -229,8 +240,8 @@ def detectar_linea(
         presente=True,
         error_px=error,
         error_mirada_px=error_mirada,
-        objetivo_px=objetivo,
-        cx=cx,
+        objetivo_px=objetivo + margen,
+        cx=cx + margen,
         cy=0,
         area=float(np.count_nonzero(mascara_cerca)),
         cobertura=cobertura,

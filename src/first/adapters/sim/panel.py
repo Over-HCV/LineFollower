@@ -182,6 +182,12 @@ class SelectorGrupo:
     def alto_boton(self, fuente: pygame.font.Font) -> int:
         return fuente.get_height() + 8
 
+    def ancho(self, fuente: pygame.font.Font) -> int:
+        """Ancho total del grupo: etiqueta + botones con su separación."""
+        return fuente.size(self.etiqueta)[0] + 10 + sum(
+            fuente.size(opcion)[0] + 18 + 6 for opcion in self.opciones
+        )
+
     def colocar(self, x: int, y: int, fuente: pygame.font.Font) -> int:
         """Posiciona etiqueta y botones; retorna el ancho total ocupado."""
         self.__pos_etiqueta = (x, y + 6)

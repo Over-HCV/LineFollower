@@ -35,14 +35,14 @@ def construir_parser() -> argparse.ArgumentParser:
         "--lap",
         dest="pista",
         choices=["cacahuate", "ovalo", "ocho", "chicane"],
-        default="cacahuate",
-        help="diseño de la pista del simulador (alias: --lap)",
+        default=None,
+        help="diseño de la pista del simulador (por defecto: la última usada)",
     )
     parser.add_argument(
         "--realismo",
         choices=["perfecto", "medio", "alto", "extremo"],
-        default="perfecto",
-        help="imperfecciones del trazo: ancho variable, huecos, manchas",
+        default=None,
+        help="imperfecciones del trazo (por defecto: el último usado)",
     )
     parser.add_argument(
         "--video",

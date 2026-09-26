@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Estado local del simulador (posiciones arrastradas)
+sim_config.json

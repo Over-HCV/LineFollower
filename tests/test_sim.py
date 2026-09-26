@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from first.adapters.sim.camera import CamaraSintetica
 from first.adapters.sim.carrera import simular_carrera
-from first.adapters.sim.world import Mundo, Pista
+from first.adapters.sim.pista import PISTAS, Pista
+from first.adapters.sim.realismo import REALISMOS
+from first.adapters.sim.world import Mundo
 from first.core.brain import Brain
 from first.core.types import Command
 
@@ -52,3 +56,35 @@ def test_carrera_completa_sigue_la_pista() -> None:
     assert metricas.descarrilamientos <= 1
     assert metricas.vueltas >= 1
     assert metricas.pares_cumplidos >= 1
+
+
+def test_cambiar_realismo_conserva_pose_y_metricas() -> None:
+    mundo = Mundo(pista=Pista(PISTAS["ovalo"]), realismo=REALISMOS["perfecto"])
+    for _ in range(60):
+        mundo.paso(Command.UP, 1.0 / 60.0)
+    pose = (mundo.carrito.x, mundo.carrito.y, mundo.carrito.theta)
+    t_previo, vueltas = mundo.t, mundo.vueltas
+    lienzo_previo = mundo.lienzo.copy()
+
+    mundo.cambiar_realismo(REALISMOS["alto"])
+
+    assert (mundo.carrito.x, mundo.carrito.y, mundo.carrito.theta) == pose
+    assert mundo.t == t_previo and mundo.vueltas == vueltas
+    assert not np.array_equal(mundo.lienzo, lienzo_previo)  # sí se repinta
+
+
+def test_mover_signo_repinta_el_lienzo() -> None:
+    mundo = Mundo(pista=Pista(PISTAS["ovalo"]))
+    lienzo_previo = mundo.lienzo.copy()
+    signo = mundo.mover_signo(0, 0.45, -1, 80.0)
+    assert signo.s == 0.45 and signo.lado == -1
+    assert not np.array_equal(mundo.lienzo, lienzo_previo)
+
+
+def test_reposicionar_en_pista_no_inventa_vueltas() -> None:
+    mundo = Mundo(pista=Pista(PISTAS["ovalo"]))
+    mundo.reposicionar_en_pista(0.95)
+    for _ in range(30):
+        mundo.paso(Command.UP, 1.0 / 60.0)
+    assert mundo.descarrilamientos == 0
+    assert mundo.vueltas <= 1  # solo la real, al cruzar la meta hacia adelante

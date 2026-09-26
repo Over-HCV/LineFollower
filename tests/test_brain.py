@@ -129,3 +129,17 @@ def test_reconfigurar_conserva_estado_y_cambia_modo() -> None:
     reloj.avanzar(0.3)  # excede el nuevo tiempo de PARE
     _, telemetria = brain.procesar(frame_con_linea(160))
     assert telemetria.estado is EstadoRobot.SIGUIENDO
+
+
+def test_reconfigurar_cortina_lateral() -> None:
+    reloj = RelojFalso()
+    brain = Brain(reloj=reloj, dibujar_debug=False)
+    # Línea pegada al borde: visible hasta que baja la cortina.
+    _, telemetria = brain.procesar(frame_con_linea(40))
+    assert telemetria.linea.presente
+
+    brain.reconfigurar(margen_lateral=60)
+    assert brain.params_linea.margen_lateral == 60
+    assert brain.estado is EstadoRobot.SIGUIENDO  # la FSM no se reinicia
+    _, telemetria = brain.procesar(frame_con_linea(40))
+    assert not telemetria.linea.presente

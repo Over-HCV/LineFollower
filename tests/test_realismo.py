@@ -7,14 +7,9 @@ import math
 import numpy as np
 
 from first.adapters.sim.camera import CamaraSintetica
-from first.adapters.sim.world import (
-    PISTAS,
-    REALISMOS,
-    Carrito,
-    Mundo,
-    Pista,
-    Realismo,
-)
+from first.adapters.sim.pista import PISTAS, Pista
+from first.adapters.sim.realismo import REALISMOS, Realismo
+from first.adapters.sim.world import Carrito, Mundo
 from first.core.brain import Brain
 from first.core.types import Command, EstadoRobot
 from first.core.vision.line import detectar_linea
@@ -106,7 +101,7 @@ def test_pistas_predefinidas_son_cerradas_y_visibles() -> None:
 
 
 def test_pista_realista_sigue_detectandose() -> None:
-    realismo = REALISMOS["realista"]
+    realismo = REALISMOS["alto"]
     assert realismo is not None
     mundo = Mundo(pista=Pista(PISTAS["cacahuate"]), signos=[], realismo=realismo)
     camara = CamaraSintetica()
@@ -187,7 +182,7 @@ def test_carrera_realista_completa_vueltas() -> None:
 
     mundo = Mundo(
         pista=Pista(PISTAS["cacahuate"]),
-        realismo=REALISMOS["realista"],
+        realismo=REALISMOS["alto"],
     )
     brain = Brain(segundos_pare=1.0, reloj=lambda: mundo.t, dibujar_debug=False)
     metricas = simular_carrera(brain, mundo, duracion=75.0, dt=1.0 / 60.0)

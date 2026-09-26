@@ -10,8 +10,11 @@ src/first/
 │   ├── control.py   # histéresis (Schmitt) + votación por mayoría (deque)
 │   └── vision/      # kmeans.py (desde cero), line.py, sign.py
 └── adapters/        # webcam, video_file, serial_arduino (stub), sim/
+    └── sim/         # pista.py (geometría) + realismo.py/trazo.py/defectos.py (render
+                     # imperfecto) + world.py (física y métricas) + camera.py +
+                     # pygame_ui.py/hud.py/controles.py/arrastre.py (UI) + config.py
 
-Resultados del simulador: 3 vueltas de 31.6s (tiempo teórico), distancia a línea p95 = 15.6px, 0 descarrilamientos, PAREs 100% cumplidos. 27/27 tests.
+Resultados del simulador: 3 vueltas de 31.6s (tiempo teórico), distancia a línea p95 = 15.6px, 0 descarrilamientos, PAREs 100% cumplidos. 65/65 tests.
 Las técnicas "ingeniosas" para diferenciarse (rúbrica)
 
 1. K-Means propio en numpy (init determinista por cuantiles, clusters vacíos reasignados) + criterio línea = oscuro Y desaturado (inmune a señales de color)
@@ -23,8 +26,11 @@ Las técnicas "ingeniosas" para diferenciarse (rúbrica)
 Cómo usarlo
 
 uv run first                    # simulador pygame (A=auto, R=reinicia, flechas=manual cuenta intervención)
+                                # barra en vivo: modo, tolerancia, PARE, cortina lateral, velocidad x
+                                # mouse: arrastra el carrito y las señales sobre la pista
+                                # la disposición se guarda en sim_config.json (el CLI explícito manda)
 uv run first --source webcam    # cámara real
 uv run first --pare-segundos 5  # el día de la competencia
-uv run pytest                   # 27 tests
+uv run pytest                   # 65 tests
 
 El mapeo a Arduino es la tabla PRESETS en adapters/sim/world.py → serial_arduino.py envía U/R/D/L\n (solo falta uv add pyserial cuando llegue el hardware). Los warnings de SDL al abrir pygame son cosméticos (opencv+pygame duplican SDL en macOS).
